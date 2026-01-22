@@ -6,7 +6,7 @@ metadata:
 spec:
   gatewayClassName: cilium
   addresses:
-    - value: "10.9.8.13"
+    - value: "10.9.8.183"
   listeners:
     - name: bacterio-http
       port: 80
