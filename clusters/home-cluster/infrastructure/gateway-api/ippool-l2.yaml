@@ -5,7 +5,7 @@ metadata:
   namespace: kube-system
 spec:
   cidrs:
-  - cidr: "10.9.8.13/32"
+  - cidr: "10.9.8.183/32"
 ---
 apiVersion: "cilium.io/v2"
 kind: CiliumL2AnnouncementPolicy
