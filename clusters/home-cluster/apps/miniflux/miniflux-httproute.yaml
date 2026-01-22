@@ -6,7 +6,6 @@ metadata:
 spec:
   parentRefs:
   - name: bacterio-gw
-    sectionName: bacterio-http
   hostnames:
   - "miniflux.carles.cc"
   rules:
