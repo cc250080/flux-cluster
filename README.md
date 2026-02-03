@@ -1,23 +1,34 @@
 # flux-cluster
 Welcome to my **really** highly opinionated Repo for my GitOps home-lab. In this repo I install a basic Vanilla [Kubernetes](https://kubernetes.io/docs/home/) and I use [Flux](https://fluxcd.io/flux/) to manage its state.
 
-## 👋 Introduction
-My personal Goal with this project is to have an easy and elegant way to manage applications that I want to run in my kubernetes home-lab while at the same time use it to keep learning the intrinsicacies of Kubernetes and GitOps. That is why I took some choices like for example installing Vanilla Kubernetes by hand. You won't find here *Ansible* playbooks or other automatisms to install Kubernetes, Flux and its tools. For now I choose to install everything by hand and learn and interiorize during the process. It is my goal to take out any abstraction on top of the basic Kubernetes components while at the same time enjoying a useful GitOps installation.
+## **Table of Content:**
+- [Introduction](#introduction)
+- [Features](#features)
+- [Pre-start Checklist](#pre-start)
+- [Machine Preparation](#machine-prep)
+- [Kubernetes and Cillium](#k8s)
+- [Flux Installation](#flux)
+- [Gateway API and SSL](#gateway)
+- [Storage: NFS](#storage)
+- [Monitoring and SRE: Robusta, Loki and Grafana](#monitoring)
 
-## ✨ Features
+## 👋 Introduction <a id="introduction"></a>
+My personal Goal with this project is to have an easy and elegant way to manage applications that I want to run in my kubernetes home-lab, while at the same time use it to keep learning the intrinsicacies of Kubernetes and GitOps. That is why I took some choices like for example installing Vanilla Kubernetes by hand. You won't find here *Ansible* playbooks or other automatisms to install Kubernetes, Flux and its tools. For now I choose to install everything by hand and learn and interiorize during the process. It is my goal to take out any abstraction on top of the basic Kubernetes components while at the same time enjoying a useful GitOps installation.
 
-- Documented **manual** Installation of Kubernetes v1.28 mono-node cluster in Debian 12 *BookWorm*
+From a technical perspective I am interested in getting as much as possible out of [Cilium](https://cilium.io/) and [eBPF](https://ebpf.io/). I will replace *Kube-proxy*, the *ingress controller* and [MetalLB](https://metallb.universe.tf/) with [Cilium](https://cilium.io/) and [Gateway API](https://gateway-api.sigs.k8s.io/).
+
+## ✨ Features <a id="features"></a>
+
+- Documented **manual** Installation of Kubernetes v1.35 mono-node cluster in Debian 12 *BookWorm*
 - Opinionated implementation of Flux with [strong community support](https://github.com/onedr0p/flux-cluster-template#-support)
-- Encrypted secrets thanks to [SOPS](https://github.com/getsops/sops) and [Age](https://github.com/FiloSottile/age)
-- Web application firewall thanks to [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps)
-- SSL certificates thanks to [Cloudflare](https://cloudflare.com) and [cert-manager](https://cert-manager.io)
-- Next-gen networking thanks to [Cilium](https://cilium.io/)
+- Encrypted secrets thanks to [SOPS](https://github.com/getsops/sops)
+- SSL certificates thanks to [Cloudflare](https://cloudflare.com), [cert-manager](https://cert-manager.io) and [let'sencrypt](https://letsencrypt.org/)
+- Next-gen networking thanks to [Cilium](https://cilium.io/) and [Gateway API](https://gateway-api.sigs.k8s.io/)
 - A [Renovate](https://www.mend.io/renovate)-ready repository
-- Integrated [GitHub Actions](https://github.com/features/actions)
 
 ... and more!
 
-## 📝 Pre-start checklist
+## 📝 Pre-start checklist <a id="pre-start"></a>
 
 Before getting started everything below must be taken into consideration, you must...
 
@@ -26,17 +37,17 @@ Before getting started everything below must be taken into consideration, you mu
 - [ ] give your nodes unrestricted internet access &mdash; **air-gapped environments won't work**.
 - [ ] have a domain you can manage on Cloudflare.
 - [ ] be willing to commit encrypted secrets to a public GitHub repository.
-- [ ] have a DNS server that supports split DNS (e.g. Pi-Hole) deployed somewhere outside your cluster **ON** your home network.
+- [ ] have a DNS server that supports split DNS (e.g. [AdGuardHome](https://github.com/AdguardTeam/AdGuardHome) or<Down> Pi-Hole) deployed somewhere outside your cluster **ON** your home network.
 
-## 💻 Machine Preparation
+## 💻 Machine Preparation <a id="machine-prep"></a>
 
 ### System Requirements
 
 According to the Official Documentation the [requirements](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/#before-you-begin) for kubernetes are just 2 Cores and 2 Gb of Ram to install a Control-Plane node, but obviously only with this we would be leaving little room left for our apps.
 
-📍 For my home-lab I will only be installing one Control-Plane node, so to run apps in it I will remove the Kubernetes *Taint* that block worker nodes from running normal Pods.
+📍 For my home-lab I will only be installing one Control-Plane node, so to run apps in it I will remove the Kubernetes *Taint* that block control-plane nodes from running normal Pods.
 
-📍 I Choose Debian Stable because IMO is the best hassle-free, community-driven and stability and security focused distribution.
+📍 I Choose Debian Stable because IMO is the best hassle-free, community-driven and stability and security focused distribution. [Talos](https://www.talos.dev/) would be another great option.
 
 ### 🌀 Debian Installation
 
@@ -112,7 +123,7 @@ After Debian is installed:
 
 
     ```sh
-    sudo vi /etc/containerd/config.toml
+    sudo vim /etc/containerd/config.toml
     ```
 
     ```sh
@@ -132,23 +143,82 @@ Edit the containerd configuration file and ensure that the option SystemdCgroup 
 
 After that restart containerd and ensure everything is up and running properly.
 
-### 🔧 Install Kubernetes with KubeAdm
 
-When we already have a CRI installed(containerd) and starting properly using systemd it is the time to install K8s, for that I wont be documenting the steps, just follow the instructions from the official Kubernetes [documentation](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/).
+    sudo systemctl restart containerd.service
+    sudo systemctl status containerd.service
+
+
+## 🔧 Install Kubernetes with KubeAdm and without KubeProxy <a id="k8s"></a>
+
+When we already have a CRI installed(containerd) and starting properly using systemd it is the time to install K8s, for this guide we want to provision a Kubernetes cluster without *kube-proxy*, and to use *Cilium* to fully replace it. For simplicity, we will use kubeadm to bootstrap the cluster. For help with installing *kubeadm* and for more provisioning options please refer to [the official Kubeadm documentation](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/).
 
 Then, after installing kubeadm, kubectl and kubelet and perform the **kubeadm init** we can ensure everything is *almost* up and ready in our cluster:
+
+```sh
+>  sudo kubeadm init --skip-phases=addon/kube-proxy
+```
+Notice that we are skipping the installation of kube-proxy, which isn't a default option. We do this because we want to use *Cilium* to take over the role of the kube-proxy. This is [requisite](https://docs.cilium.io/en/stable/network/servicemesh/gateway-api/gateway-api/#what-is-gateway-api) of *Cilium* to be able to use its implementation of the [Gateway API](https://docs.cilium.io/en/stable/network/servicemesh/ingress-to-gateway/ingress-to-gateway/#benefits-of-the-gateway-api).
 
 ```sh
 ~ on  main [!?] 
 ❯ k get nodes
 NAME       STATUS   ROLES           AGE   VERSION
-bacterio   UnReady    control-plane   5d    v1.28.3
+bacterio   NotReady    control-plane   5d    v1.35.0
 ```
 In order to get a Ready state, we still have to install our Pod Network Add-on or **CNI**.
 
-### Installing the Container Network Interface (CNI) add-on
+### Install Gateway API
 
-In order to install **Cilium** it is enough to follow the [Cillium Quick Installation](https://docs.cilium.io/en/stable/gettingstarted/k8s-install-default/), we will ned with the *Cilium CLI* tool and *Cilium* installed in our Cluster.
+Before installing the *Container Network Interface* we will install the necessary *CRD*s for the Gateway API to work:
+
+```bash
+kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml
+``` 
+
+### 🌐 Installing the Container Network Interface (CNI) add-on
+
+In this guide we will install *Cilium* using *Helm*, as described in the [Cilium Documentation](https://docs.cilium.io/en/stable/network/kubernetes/kubeproxy-free/#kubeproxy-free) for *Kube-Proxy* free kubernetes.
+
+1. First we add the *Cilium* Helm repository:
+```bash
+helm repo add cilium https://helm.cilium.io/
+```
+
+2. We install *Cilium* setting up the right env vars:
+```bash
+API_SERVER_IP=<your_api_server_ip>
+# Kubeadm default is 6443
+API_SERVER_PORT=<your_api_server_port>
+helm install cilium cilium/cilium --version 1.18.6 \
+    --set operator-replicas=1 \
+    --namespace kube-system \
+    --set kubeProxyReplacement=true \
+    --set gatewayAPI.enabled=true \
+    --set k8sServiceHost=${API_SERVER_IP} \
+    --set k8sServicePort=${API_SERVER_PORT} \
+    --set l2announcements.enabled=true \
+    --set externalIPs.enabled=true \
+    --set hubble.ui.enabled=true \
+    --set hubble.relay.enabled=true \
+    --set k8s.requireIPv4PodCIDR=true \
+    --set annotateK8sNode=true
+```
+
+This will install Cilium as a CNI plugin with the eBPF kube-proxy replacement to implement handling of Kubernetes services of type ClusterIP, NodePort, LoadBalancer and services with externalIPs. As well, the eBPF kube-proxy replacement also supports hostPort for containers such that using portmap is not necessary anymore.
+
+Finally, as a last step, verify that Cilium has come up correctly on all nodes and is ready to operate:
+
+```bash
+$ kubectl -n kube-system get pods -l k8s-app=cilium
+NAME                READY     STATUS    RESTARTS   AGE
+cilium-fmh8d        1/1       Running   0          10m
+```
+
+Note, in above Helm configuration, the **kubeProxyReplacement** has been set to **true** mode. This means that the Cilium agent will bail out in case the underlying Linux kernel support is missing.
+
+By default, Helm sets **kubeProxyReplacement=false**, which only enables per-packet in-cluster load-balancing of ClusterIP services.
+
+Cilium’s eBPF kube-proxy replacement is supported in direct routing as well as in tunneling mode.
 
 And after that the Cluster will become Ready.
 
@@ -156,8 +226,26 @@ And after that the Cluster will become Ready.
 ~ on  main [!?] 
 ❯ k get nodes
 NAME       STATUS   ROLES           AGE   VERSION
-bacterio   Ready    control-plane   5d    v1.28.3
+bacterio   Ready    control-plane   5d    v1.29.3
 ```
+
+#### Validate the Setup
+
+After deploying Cilium with above Quick-Start guide, we can first validate that the Cilium agent is running in the desired mode:
+
+```bash
+$ kubectl -n kube-system exec ds/cilium -- cilium-dbg status | grep KubeProxyReplacement
+KubeProxyReplacement:   True        [eth0 (Direct Routing), eth1]
+```
+
+#### Hubble UI
+
+*Cilium* provides *Hubble* for observability, it can both be used using the *Hubble CLI* or the *UI*, in order to access the *Hubble UI* you just need to execute:
+
+```bash
+cilium hubble ui
+```
+
 ### Untaint the Cluster to be able to Run Pods
 
 Finally, we untaint the *Control-Plane* node to allow it to run workloads and test that it can in fact run a *Pod*.
@@ -171,4 +259,393 @@ kubectl run testpod --image=nginx
 kubectl get pods
 ```
 
+## 🤖 Installing Flux <a id="flux"></a>
+
+[Flux](https://fluxcd.io/) is a set of continuous and progressive delivery solutions for Kubernetes that are open and extensible. In a more plain language Flux is a tool for keeping Kubernetes clusters in sync with sources of configuration (like Git repositories), that way we can use GIT as source of truth and use it to interact with our Cluster.
+
+### Install the Flux CLI
+
+The **Flux** command-line interface (CLI) is used to bootstrap and interact with Flux.
+
+```sh
+curl -s https://fluxcd.io/install.sh | sudo bash
+```
+
+And [here](https://fluxcd.io/flux/cmd/flux_completion_bash/) you can find instructions to add *bash* autocompletion features to the shell.
+
+### Export your credentials
+
+Export your GitHub personal access token and username:
+
+```sh
+export GITHUB_TOKEN=<your-token>
+export GITHUB_USER=<your-username>
+```
+
+The kind of *GITHUB_TOKEN* in use here is **PAT**(Personal Access Token)
+
+### Check your Kubernetes Cluster
+
+We can use the Flux CLI to run a pre-flight check on our Cluster and see if we fulfill all the basic requirements to install **Flux**.
+
+```sh
+flux check --pre
+```
+Which should produce an output like:
+```sh
+► checking prerequisites
+✔ kubernetes 1.29.2 >=1.25.0
+✔ prerequisites checks passed
+```
+
+### Installing Flux onto the Cluster
+
+For information on how to bootstrap using a GitHub org, Gitlab and other git providers, see [Bootstraping](https://fluxcd.io/flux/installation/bootstrap/).
+
+```sh
+flux bootstrap github \
+  --owner=$GITHUB_USER \
+  --repository=home-cluster \
+  --branch=main \
+  --path=./clusters/home-cluster \
+  --personal
+```
+
+The output is similar to:
+
+```sh
+► connecting to github.com
+✔ repository created
+✔ repository cloned
+✚ generating manifests
+✔ components manifests pushed
+► installing components in flux-system namespace
+deployment "source-controller" successfully rolled out
+deployment "kustomize-controller" successfully rolled out
+deployment "helm-controller" successfully rolled out
+deployment "notification-controller" successfully rolled out
+✔ install completed
+► configuring deploy key
+✔ deploy key configured
+► generating sync manifests
+✔ sync manifests pushed
+► applying sync manifests
+◎ waiting for cluster sync
+✔ bootstrap finished
+```
+The bootstrap command above does the following:
+
+- Creates a git repository *home-cluster* on your GitHub account.
+- Adds Flux component manifests to the repository.
+- Deploys Flux Components to your Kubernetes Cluster. 
+- Configures Flux components to track the path /clusters/home-cluster/ in the repository
+
+By default **Flux** installs 4 components: **source-controller**, **kustomize-controller**, **helm-controller** and **notification-controller**, you can check that all of them are properly running by looking in the *flux-system* namespace.
+
+```sh
+❯ k get all -n flux-system
+NAME                                          READY   STATUS    RESTARTS   AGE
+pod/helm-controller-5f964c6579-z44r9          1/1     Running   0          6d18h
+pod/kustomize-controller-9c588946c-6h9fd      1/1     Running   0          6d18h
+pod/notification-controller-76dc5d768-z47jw   1/1     Running   0          6d18h
+pod/source-controller-6c49485888-gl6dz        1/1     Running   0          6d18h
+
+NAME                              TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE
+service/notification-controller   ClusterIP   10.97.135.57    <none>        80/TCP    6d18h
+service/source-controller         ClusterIP   10.97.126.173   <none>        80/TCP    6d18h
+service/webhook-receiver          ClusterIP   10.107.72.214   <none>        80/TCP    6d18h
+
+NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/helm-controller           1/1     1            1           6d18h
+deployment.apps/kustomize-controller      1/1     1            1           6d18h
+deployment.apps/notification-controller   1/1     1            1           6d18h
+deployment.apps/source-controller         1/1     1            1           6d18h
+
+NAME                                                DESIRED   CURRENT   READY   AGE
+replicaset.apps/helm-controller-5f964c6579          1         1         1       6d18h
+replicaset.apps/kustomize-controller-9c588946c      1         1         1       6d18h
+replicaset.apps/notification-controller-76dc5d768   1         1         1       6d18h
+replicaset.apps/source-controller-6c49485888        1         1         1       6d18h
+```
+
+And now, to move to the next steps, we can just clone the **GIT** repository we just created to start deploying apps and configuration onto our Cluster.
+
+```sh
+git clone git@github.com:cc250080/home-cluster.git
+cd home-cluster
+```
+
+### Flux Structure
+
+To structure the repository we use a mono-repo approach, the flux documentation [Ways of structuring your repositories](https://fluxcd.io/flux/guides/repository-structure/) is very helpful here specially the following example which I took as a [baseline](https://github.com/fluxcd/flux2-kustomize-helm-example).
+
+```bash
+├── apps #The applications are installed in this folders
+│   └── miniflux
+│       ├── kustomization.yaml
+│       ├── miniflux-httproute.yaml
+│       └── miniflux.yaml
+├── flux-system # Flux components
+│   ├── gotk-components.yaml
+│   ├── gotk-sync.yaml
+│   └── kustomization.yaml
+└── infrastructure # This is executed before apps, here the yamls are for controllers, infrastructure and sources like Helm Repositories
+    ├── cert-manager
+    │   ├── certificate-carlescc.yaml
+    │   ├── cert-manager.crds.yaml
+    │   ├── cert-manager.yaml
+    │   ├── cloudflare-api-token-secret-encrypted.yaml
+    │   ├── clusterIssuer.yaml
+    │   ├── kustomization.yaml
+    │   └── ns-cert-manager.yaml
+    ├── gateway-api
+    │   ├── bacterio-gw.yaml
+    │   ├── ippool-l2.yaml
+    │   └── kustomization.yaml
+    └── sources
+```
+
+### Securing Kubernetes Secrets with Sops
+
+In the past, I loaded kubernetes secrets by hand with kubectl apply and kept them out of any shared storage, including git repositories. However, in my quest to follow the gitops way, I wanted a better option with much less manual work. My goal is to build a kubernetes deployment that could be redeployed from the git repository at a moment’s notice with the least amount of work required.
+
+In order to store secrets safely in a public or private Git repository, we will use Mozilla’s [SOPS](https://github.com/mozilla/sops) CLI to encrypt Kubernetes secrets with Age (other options like OpenPGP, AWS KMS, GCP KMS or Azure Key Vault are also supported).
+
+```bash
+sudo apt install age
+curl -LO https://github.com/getsops/sops/releases/download/v3.8.1/sops-v3.8.1.linux.amd64
+sudo mv sops-v3.8.1.linux.amd64 /usr/local/bin/sops
+sudo chmod +x /usr/local/bin/sops
+```
+#### Verify checksums file signature
+
+```bash
+# Download the checksums file, certificate and signature
+curl -LO https://github.com/getsops/sops/releases/download/v3.8.1/sops-v3.8.1.checksums.txt
+curl -LO https://github.com/getsops/sops/releases/download/v3.8.1/sops-v3.8.1.checksums.pem
+curl -LO https://github.com/getsops/sops/releases/download/v3.8.1/sops-v3.8.1.checksums.sig
+
+# Verify the checksums file
+cosign verify-blob sops-v3.8.1.checksums.txt \
+  --certificate sops-v3.8.1.checksums.pem \
+  --signature sops-v3.8.1.checksums.sig \
+  --certificate-identity-regexp=https://github.com/getsops \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com
+```
+
+#### Create the Age key and insert it in our Cluster
+
+```bash
+ age-keygen -o age.agekey
+Public key: age1wnvnq64tpze4zjdmq2n44eh7jzkxf5ra7mxjvjld6cjwtaddffqqc54w23
+ cat age.agekey
+# created: 2022-04-19T14:41:19-05:00
+# public key: age1wnvnq64tpze4zjdmq2n44eh7jzkxf5ra7mxjvjld6cjwtaddffqqc54w23
+AGE-SECRET-KEY-13T0N7N0W9NZKDXEFYYPWU7GN65W3UPV6LRERXUZ3ZGED8SUAAQ4SK6SMDL
+```
+
+As you can see, Age creates both a Public and a Private Key. I recommend that you store this Secret now in your to-go key management software.
+
+Create a secret with the age private key, the key name must end with .agekey to be detected as an age key:
+
+```bash
+cat age.agekey |
+kubectl create secret generic sops-age \
+--namespace=flux-system \
+--from-file=age.agekey=/dev/stdin
+```
+
+Next, make encryption easier by creating a small configuration file for SOPS. This allows you to encrypt quickly without telling SOPS which key you want to use. Create a .sops.yaml file like this one in the root directory of your flux repository:
+
+```bash
+creation_rules:
+  - encrypted_regex: '^(data|stringData)$'
+    age: age1wnvnq64tpze4zjdmq2n44eh7jzkxf5ra7mxjvjld6cjwtaddffqqc54w23
+```
+
+Finally, we must tell flux that it needs to decrypt secrets and we must provide the location of the decryption key. Flux is built heavily on [Kustomize](https://kustomize.io/) manifests and that’s where our key configuration belongs.
+
+Edit the file *gotk-sync.yaml* from the flux-system folder in the base of your Git cluster configuration:
+
+```yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: flux-system
+  namespace: flux-system
+spec:
+  interval: 10m0s
+  path: ./clusters/home-cluster
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+```
+
+#### Encrypt a Secret with Sops
+
+Now we are ready to encrypt a secret and push it into our GitOps Repository:
+
+```bash
+sops -e cloudflare-api-token-secret.yaml | tee cloudflare-api-token-secret-encrypted.yaml
+```
+
+## ☁️ Gateway API and SSL <a id="gateway"></a>
+
+Thanks to Cilium and [Gateway API](https://gateway-api.sigs.k8s.io/) we can have an installation of Services that do not require Ingress Controllers or [MetalLB](https://metallb.universe.tf/). Note that from now on all the actions in the cluster will be performed using GitOps and organizing/pushing yamls into the GitOps Repository.
+
+![Gateway API](./img/home-cluster-gatewayapi.webp)
+
+I wont go here in much detail about the role-oriented nature of Gateway API, but let's say that we will build some generic or more static components that can be used by all services, and then each application that we install will only need a small and simple HTTPRoute object to function.
+
+![Gateway API Roles](./img/gatewayapi-role.png)
+
+The *GatewayClass* is something we already created when we installed *Cilium*, in this case our GatewayClass will be **Cilium**.
+
+### CiliumLoadBalancerIPPool and CiliumL2AnnouncementPolicy
+
+This *Cilium* objects are used to ensure a Pool of external IPs on our **Home-Server**, they work by attaching an IP to a Pool and then use ARP over the physical network interfaces. Note that I have used a *refex* to configure the *ARP* advertisement. *BGP* is also supported by *Cilium* but that would be overkill for my small home setup.
+
+```yaml
+apiVersion: "cilium.io/v2"
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: bacterio-ip-pool
+  namespace: kube-system
+spec:
+  blocks:
+  - cidr: "10.9.8.13/32"
+---
+apiVersion: "cilium.io/v2alpha1"
+kind: CiliumL2AnnouncementPolicy
+metadata:
+  name: bacterio-l2advertisement-policy
+  namespace: kube-system
+spec:
+  interfaces:
+    - ^enx+ # host interface regex
+  externalIPs: true
+  loadBalancerIPs: true
+```
+### Gateway
+
+The Gateway objects listens on the external IP address that we reserved in the previos step and listens on port 80 and 443, doing TLS offloading. For tls it consumes a wildcard certificate managed by *cert-manager*. This *Gateway* will be used for all the Workloads in my server that needs **HTTP** or **HTTPS** access.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: bacterio-gw
+  namespace: default
+spec:
+  gatewayClassName: cilium
+  addresses:
+    - value: "10.9.8.13"
+  listeners:
+    - name: bacterio-http
+      port: 80
+      protocol: HTTP
+    - name: bacterio-https
+      port: 443
+      protocol: HTTPS
+      hostname: "*.carles.cc"
+      tls:
+        mode: Terminate
+        certificateRefs:
+        - kind: Secret
+          name: wildcard-carlescc
+      allowedRoutes:
+        namespaces:
+          from: All
+```
+
+### Example of an HTTPRoute
+
+The HTTPRoute object is just the nex between the *Service* of our application and the *Gateway* and is a very simple object, here I provide an example of the HTTPRoute I configured for my *RSS* server (miniflux). Basically we specify the *Gateway* we want to use as the Parent, the *Service* as the *backendRef* and the *hostname* we want to use for our application.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: miniflux-route
+  namespace: default
+spec:
+  parentRefs:
+  - name: bacterio-gw
+  hostnames:
+  - "miniflux.carles.cc"
+  rules:
+  - backendRefs:
+    - name: miniflux
+      port: 8080
+```
+
+## Storage: Kubernetes NFS CSI Driver <a id="storage"></a>
+
+The NFS CSI Driver allows a Kubernetes cluster to access NFS servers on Linux. The driver is installed in the Kubernetes cluster and requires existing and configured NFS servers.
+
+The status of the project is GA, meaning it is in General Availability and should be considered to be stable for production use.
+
+The installation is also pretty straightforward. First we install the NFS CSI Driver:
+
+```yaml
+apiVersion: helm.toolkit.fluxcd.io/v2beta2
+kind: HelmRelease
+metadata:
+  name: csi-driver-nfs
+  namespace: kube-system
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: csi-driver-nfs 
+      version: '4.6.*'
+      sourceRef:
+        kind: HelmRepository
+        name: csi-driver-nfs
+        namespace: default
+      interval: 60m
+  values:
+    replicaCount: 1
+```
+
+And then we create a *StorageClass* that can be used by our applications:
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-csi
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: ofelia.carles.cc 
+  share: /volume1/k8snfs
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+```
+
+Here the parameters server and share are pointing to my personal NAS server, which should be ready prior to performing this task.
+
+## 🤝 Monitoring and SRE: Robusta, Loki and Grafana <a id="monitoring"></a>
+
+This section is still a work in progress, I set up a minimal monitoring including an SRE application I want to explore, [Robusta](https://home.robusta.dev/).
+
+I isolated the components to keep things *KISS* and grafana is automatically setting up the datasources and importing a *Kubernetes* from the dashboard official page.
+
+In the future I plan to improve this by using an object storage for [Loki](https://grafana.com/oss/loki/) and also to allow me to use [Mimir](https://grafana.com/oss/mimir/).
+
+```bash
+├── monitoring
+│   ├── grafana.yaml
+│   ├── kustomization.yaml
+│   ├── loki.yaml
+│   ├── ns-monitoring.yaml
+│   ├── prometheus.yaml
+│   ├── promtail.yaml
+│   └── robusta.yaml
+```
 

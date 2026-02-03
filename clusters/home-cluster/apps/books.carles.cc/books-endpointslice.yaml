@@ -1,0 +1,17 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: books
+  namespace: default
+  labels:
+    kubernetes.io/service-name: books
+addressType: FQDN
+endpoints:
+  - addresses:
+      - "books.carles.cc"
+    conditions:
+      ready: true
+ports:
+  - name: http
+    port: 8083
+    protocol: TCP
