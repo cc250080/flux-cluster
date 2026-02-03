@@ -5,10 +5,10 @@ metadata:
   namespace: default
   labels:
     kubernetes.io/service-name: books
-addressType: FQDN
+addressType: IP
 endpoints:
   - addresses:
-      - "books.carles.cc"
+      - "10.9.8.189"
     conditions:
       ready: true
 ports:
